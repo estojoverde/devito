@@ -13,6 +13,12 @@ from devito.logger import logger
 from devito.parameters import configuration
 from devito.tools import dtype_to_ctype
 
+try:
+    from cupy import ndarray as cp_array
+except:
+    cp_array = None
+            
+
 __all__ = ['ALLOC_FLAT', 'ALLOC_NUMA_LOCAL', 'ALLOC_NUMA_ANY',
            'ALLOC_KNL_MCDRAM', 'ALLOC_KNL_DRAM', 'ALLOC_GUARD',
            'default_allocator']
@@ -353,36 +359,31 @@ class ExternalAllocator(MemoryAllocator):
            [1., 1.]], dtype=float32)
     """
 
-    def __init__(self, ext_pointer):
-        tmp_str_type = str(type(ext_pointer))
-        tmp_str_type = tmp_str_type.split('<class \'')[1].split('\'>')[0]
-        match tmp_str_type: 
-            case 'cupy._core.core.ndarray':
-                extmem_pointer = ctypes.cast(ext_pointer.data.ptr, ctypes.c_void_p)
-                extmem_ctype = np.ctypeslib.as_ctypes_type(ext_pointer.dtype)
-                total_size = 1
-                for dim in ext_pointer.shape:
-                    total_size *= dim
-                ctype_1d = extmem_ctype * total_size
-                buf = ctypes.cast(extmem_pointer, ctypes.POINTER(ctype_1d)).contents
-                pointer = np.frombuffer(buf, dtype=ext_pointer.dtype)
-                pointer = pointer.reshape(ext_pointer.shape)
-                self.ext_pointer = pointer
-            case 'numpy.ndarray' :
-                self.ext_pointer = ext_pointer
-            case _:
-                raise RuntimeWarning("Unknown data type when ExternalAllocator was called")
-
+    def __init__(self, ext_obj):
+        if cp_array and isinstance(ext_obj, cp_array) :
+            extmem_pointer = ctypes.cast(ext_obj.data.ptr, ctypes.c_void_p)
+            extmem_ctype = np.ctypeslib.as_ctypes_type(ext_obj.dtype)
+            total_size = 1
+            total_size = [total_size*dim for dim in ext_obj.shape]
+            ctype_1d = extmem_ctype * total_size
+            buf = ctypes.cast(extmem_pointer, ctypes.POINTER(ctype_1d)).contents
+            internal_obj = np.frombuffer(buf, dtype=ext_obj.dtype)
+            internal_obj = internal_obj.reshape(internal_obj.shape)
+            self.internal_obj = internal_obj
+        elif isinstance(ext_obj, np.ndarray) :
+            self.internal_obj = ext_obj
+        else:
+            raise RuntimeWarning("Unknown data type when ExternalAllocator was called")
 
     def alloc(self, shape, dtype):
-        assert shape == self.ext_pointer.shape, \
+        assert shape == self.internal_obj.shape, \
             "Provided array has shape %s. Expected %s" %\
-            (str(self.ext_pointer.shape), str(shape))
-        assert dtype == self.ext_pointer.dtype, \
+            (str(self.internal_obj.shape), str(shape))
+        assert dtype == self.internal_obj.dtype, \
             "Provided array has dtype %s. Expected %s" %\
-            (str(self.ext_pointer.dtype), str(dtype))
+            (str(self.internal_obj.dtype), str(dtype))
 
-        return (self.ext_pointer, None)
+        return (self.internal_obj, None)
 
 
 ALLOC_GUARD = GuardAllocator(1048576)
